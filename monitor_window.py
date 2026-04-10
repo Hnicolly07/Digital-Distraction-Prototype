@@ -50,7 +50,7 @@ def main():
         janelas_classificadas = classifica_janela(janelas)
         
         if janelas_classificadas:
-            print("✔ Classificação concluída com sucesso!")
+            print("Classificação concluída com sucesso!")
 
             # 1. Transformar o texto em um dicionário Python real
             dados_processados = json.loads(janelas_classificadas)
@@ -65,10 +65,7 @@ def main():
                 print(f"Frequencia de Distrações: {f}")
                 # Aqui entra o bglh de salvar no SQLite       
     except Exception as e:
-        print(f"❌ Erro na IA: {e}")
-        
-
-        #Resumption Lag: f * 5
+        print(f"Erro na IA: {e}")
 
 def classifica_janela(janelas):
 

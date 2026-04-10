@@ -1,2 +1,4 @@
 pygetwindow
 watchdog
+groq
+python-dotenv

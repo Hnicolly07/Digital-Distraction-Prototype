@@ -1,8 +1,13 @@
-import webbrowser, models, monitor_window, monitor_code
+import webbrowser, models, monitor_window, monitor_code, threading
+
+#usar thread pra fazer múltiplas tarefas (monitorar janela e monitorar arquivo) ao mesmo tempo
 
 id_usuario = 0 #vou trocar
 
 def main():
+    #observer.start()
+    #time.sleep(1)
+
     finalizar_sessao(id_usuario)
     
 
