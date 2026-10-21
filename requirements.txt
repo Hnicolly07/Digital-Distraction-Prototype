@@ -1,4 +1,6 @@
 pygetwindow
-watchdog
 groq
 python-dotenv
+pynput
+undetected-chromedriver
+selenium

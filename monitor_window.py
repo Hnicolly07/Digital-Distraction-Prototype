@@ -1,89 +1,78 @@
-# Declarações
-from groq import Groq
-from dotenv import load_dotenv
+# rastreia mudanças de foco a cada segundo e escreve linhas brutas no CSV de navegação.
+# classificação em relacionada e não relacionada foi removida, só será feita no processamento dos dados
+
+import csv
+import threading
+import time
 import pygetwindow as gw
-import os, time, json, sqlite3
+import selenium_runner
 
-load_dotenv()
+# palavras-chave que indicam que o participante está na janela da tarefa
+# no momento está apenas como freecodecamp mas penso em expandir
+PALAVRA_TAREFA = "freecodecamp"
 
-client = Groq(
-    api_key= os.getenv("GROQ_API_KEY"),
-)
 
-def main():
-    tempo_inicio = time.time() # Define tempo_inicio como o horario de inicio do programa
-    titulo_anterior = "" # Inicialiaza titulo_anterior, usada pra armazenar o nome da janela anterior
-    f = duracao = 0 # Define f (frequencia de distração) e duração como 0
-    janelas = []
-    
-    while True:
+def eh_janela_da_tarefa(titulo) -> bool: #aqui não dá pra passar o titulo, tem que passar a url apenas
+    #retorna True quando a janela ativa pertence à atividade do freecodecamp
+    if PALAVRA_TAREFA in titulo.lower():
+        return True
+    return False
+
+
+# VOU ALTERAR
+def escrever_linha_nav(escritor,lock,timestamp,url_ativa,titulo,na_aba):
+    #Adiciona uma linha de evento de navegação ao CSV de forma thread-safe
+    with lock:
+        #timestamp, url ativa no momento, titulo, true/false
+        escritor.writerow([timestamp, url_ativa, titulo, na_aba])
+
+
+def monitorar_janela(estado: dict,escritor_csv: csv.writer,lock_csv: threading.Lock,lock_navegador: threading.Lock,intervalo_poll: float = 1.0,) -> None:
+    """
+    Thread em segundo plano — roda enquanto estado["executando"] for True.
+
+    A cada mudança de foco detectada:
+      - Atualiza estado["janela_focada_titulo"] e estado["na_aba_da_tarefa"]
+      - Escreve imediatamente uma linha de evento bruto no CSV de navegação
+    """
+    titulo_anterior: str = ""
+
+    print("[monitor_janela] Monitoramento de janela iniciado.")
+
+    while estado["executando"]: # esse estado está sendo controlado na main
         try:
-            janela = gw.getActiveWindow() # Define janela
-            if janela is not None:
-                titulo = janela.title # Define titulo como o titulo da janela atual
-        
-                duracao = round(time.time() - tempo_inicio)
+            janela = gw.getActiveWindow() #pega a janela ativa no sistema (função do proprio pygetwindow)
+            if janela is None: #se a janela estiver vazia
+                time.sleep(intervalo_poll)
+                continue #apenas continue esperando um titulo de janela aparecer
 
-                # Identifica a troca de janela
-                if titulo is not None and titulo != titulo_anterior:
-                    print(f"JANELA: {titulo}")
-                    log = {"janela": titulo, "duração": duracao, "timestamp": time.strftime('%H:%M:%S',time.localtime(tempo_inicio))}
-                    janelas.append(log)
-                    tempo_inicio = time.time() # Reinicia o tempo do uso da janela
+            titulo: str = janela.title or "" # "" se n tiver titulo
 
-                
-            titulo_anterior = titulo # Atualiza titulo da janela anterior
-            
-    
-            time.sleep(1)
-        except KeyboardInterrupt:
-            print("\n--- [!] Monitoramento Finalizado pelo Usuário ---")
-        
-            if not janelas:
-                print("Nenhum dado coletado.")
-                return
-            break
+            if titulo != titulo_anterior: #se o titulo for diferente do titulo anterior já registrado, então houve uma mudança de janela
+                timestamp = time.time() #pegue o momento exato da mudança
+                na_aba = eh_janela_da_tarefa(titulo) #verifique se está na janela da tarefa principal (freecodecamp)
 
-    # PASSO 1: Tentar classificar com a IA
-    try:
-        print("Enviando para classificação ... Aguarde.")
-        janelas_classificadas = classifica_janela(janelas)
-        
-        if janelas_classificadas:
-            print("Classificação concluída com sucesso!")
+                navegador = estado.get("navegador")
+                url_real = selenium_runner.obter_url_pela_titulo(navegador, lock_navegador, titulo)
+                url_final = url_real if url_real is not None else ""
 
-            # 1. Transformar o texto em um dicionário Python real
-            dados_processados = json.loads(janelas_classificadas)
+                # Atualiza estado compartilhado
+                estado["janela_focada_titulo"] = titulo
+                estado["na_aba_da_tarefa"] = na_aba 
+                estado["url_ativa"] = url_final
 
-            for item in dados_processados["janelas"]:
-                if item['categoria'] == "Non-Task-Related":
-                    f += 1
+                # escreve tudo no csv
+                escrever_linha_nav(escritor_csv, lock_csv, timestamp, url_final, titulo, na_aba)
+                # provavelmente vou mudar pra ter o timestamp final e inicial da atividade
+                #  ou pegar o de inicio dessa e o inicio da proxima
 
-            with open('classificacao.json', 'w', encoding='utf-8') as arquivo:
-                json.dump(dados_processados, arquivo, indent=4, ensure_ascii=False)
-                print("✔ Resultados salvos em 'classificacao.json'")
-                print(f"Frequencia de Distrações: {f}")
-                # Aqui entra o bglh de salvar no SQLite       
-    except Exception as e:
-        print(f"Erro na IA: {e}")
+                print(f"[monitor_janela] Foco → '{titulo}' | tarefa={na_aba}")
+                titulo_anterior = titulo
 
-def classifica_janela(janelas):
+        except Exception as e: #caso dê erro, ele vai printar o erro
+            # Nunca deixa a thread de monitoramento cair — apenas loga e continua
+            print(f"[monitor_janela] Erro ignorado: {e}")
 
-    prompt = f"""Classifique a lista de janelas a seguir como Task-Related ou Non-Task-Related sabendo que a atividade principal da pessoa é programar em Python.
-    Retorne apenas o JSON original com um novo campo chamado 'categoria'. No caso de janelas como youtube, verifique se o título do vídeo é relacionado.
-    
-    Dados: {json.dumps(janelas)}"""
-    chat_completion = client.chat.completions.create(
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        response_format={"type": "json_object"},
-        model="llama-3.3-70b-versatile",
-    )
+        time.sleep(intervalo_poll)
 
-    return chat_completion.choices[0].message.content
-
-main()
+    print("[monitor_janela] Thread encerrada.")
